@@ -3,7 +3,7 @@
 z80-internal import
 oo import
 
-1024 buffer: ram
+65536 buffer: ram
 variable out_p
 variable out_d
 
@@ -47,7 +47,7 @@ variable fails
     then cr
 ;
 
-: test
+: test-int
     0 fails !
     cr
     ." rb : "
@@ -349,7 +349,30 @@ variable fails
     cpu -> debug-output
     ." fails: " fails @ . cr
     ." depth: " depth . cr
+
 ;
 
+#include zexall.cim.fs
 
+
+: test-zexall
+    $100 cpu -> pc h!
+    zexall-len 0 do zexall i + c@ ram $100 + i + c! loop
+    0 ram 6 + c! 128 ram 7 + c!
+    0 { done }
+    begin
+        cpu -> debug-output
+        cpu -> step
+        cpu -> pc h@ case
+            5 of 
+                ." -----" cr 
+                cpu -> ret
+            endof
+            0 of
+                1 to done
+            endof
+        endcase
+        key? if key 27 = if 1 to done then then
+    done until
+;
 

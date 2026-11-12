@@ -103,7 +103,6 @@ begin-module z80
     
     defer opcodes-table-adr
     defer opcodes-ddfd-table-adr
-    defer opcodes-cb-table-adr
     defer opcodes-ed-table-adr
 
 
@@ -115,7 +114,6 @@ begin-module z80
         cell member userdata 
         cell member opcodes-table
         cell member opcodes-ddfd-table
-        cell member opcodes-cb-table
         cell member opcodes-ed-table
 
         2 cells member cyc         ( cycle count (t-states )
@@ -201,6 +199,7 @@ begin-module z80
         method ini              ( self -- )
         method ind              ( self -- )
         method outi             ( self -- )
+        method outd             ( self -- )
         method daa              ( self -- )
         method displace         ( adr16 offset8 self -- newadr )
         method process-interrupts ( self -- )
@@ -212,6 +211,7 @@ begin-module z80
         method exec-opcode-cb   ( opcode self -- )
         method exec-opcode-ed   ( opcode self )
         method exec-opcode-ddfd ( opcode reg_adr self )
+        method exec-opcode-dcb  ( op adr self -- )
 
         
 
@@ -250,7 +250,6 @@ begin-module z80
             out_cb self -> port-out-cb !     ( z80 port byte -- )
             opcodes-table-adr self -> opcodes-table !
             opcodes-ddfd-table-adr self -> opcodes-ddfd-table !
-            opcodes-cb-table-adr self -> opcodes-cb-table !
             opcodes-ed-table-adr self -> opcodes-ed-table !
         ; define new
 
@@ -723,6 +722,12 @@ begin-module z80
             self get-bc 1+ self -> mem_ptr h!
         ; define outi
 
+        :noname { self }
+            self -> outi
+            self -> get-hl 2 - self -> set-hl
+            self -> get-bc 2 - self -> mem_ptr h!
+        ; define outd
+
         :noname { self -- }
             0 0 { correction substraction }
             self -> a c@ $0F and $09 > 
@@ -758,7 +763,7 @@ begin-module z80
         :noname { self }
             self -> iff_delay c@ 0> if
                 -1 self -> iff_delay c+!
-                self -> iff_delay 0= if
+                self -> iff_delay c@ 0= if
                     self -> state c@ iff1 iff2 or or self -> state c!
                 then
                 exit
@@ -771,7 +776,7 @@ begin-module z80
                 exit
             then
             self -> state c@ int_pending and 0>
-            self -> state c@ iff1 0> and if
+            self -> state c@ iff1 and 0> and if
                 self -> state c@ int_pending halted iff1 iff2 or or or 255 xor and
                 self -> state c!
                 self -> inc-r
@@ -819,6 +824,7 @@ begin-module z80
                     self -> pc h@ 2 + self -> rb h.2 space
                     self -> pc h@ 3 + self -> rb h.2 space
             ." ), cyc: " self -> cyc 2@ d.
+            depth .
             cr
         ; define debug-output
 
@@ -843,8 +849,117 @@ begin-module z80
            iz self self -> opcodes-ddfd-table @ opcode cells + @ execute
         ; define exec-opcode-ddfd
 
+        :noname { opcode z }
+            8. z -> cyc 2+!
+            z -> inc-r
+            opcode 6 rshift 3 and { _x_ }
+            opcode 3 rshift 7 and { _y_ }
+            opcode 7 and          { _z_ }
+            z -> dummy            { _hl_ }
+            0                     { _reg_ }
 
+            _z_ case
+                0 of z -> b to _reg_ endof
+                1 of z -> c to _reg_ endof
+                2 of z -> d to _reg_ endof
+                3 of z -> e to _reg_ endof
+                4 of z -> h to _reg_ endof
+                5 of z -> l to _reg_ endof
+                6 of z -> get-hl z -> rb _hl_ c! _hl_ to _reg_ endof
+                7 of z -> a to _reg_ endof
+            endcase
+
+            _x_ case
+                0 of
+                    _y_ case
+                        0 of _reg_ c@ z -> cb_rlc _reg_ c! endof
+                        1 of _reg_ c@ z -> cb_rrc _reg_ c! endof
+                        2 of _reg_ c@ z -> cb_rl  _reg_ c! endof
+                        3 of _reg_ c@ z -> cb_rr  _reg_ c! endof
+                        4 of _reg_ c@ z -> cb_sla  _reg_ c! endof
+                        5 of _reg_ c@ z -> cb_sra  _reg_ c! endof
+                        6 of _reg_ c@ z -> cb_sll  _reg_ c! endof
+                        7 of _reg_ c@ z -> cb_srl  _reg_ c! endof
+                    endcase
+                endof
+                1 of
+                    _reg_ c@ _y_ z -> cb_bit
+                    _z_ 6 = if
+                        z -> f c@ xf yf or 255 xor and
+                        5 z -> mem_ptr h@ 8 rshift if yf or then
+                        3 z -> mem_ptr h@ 8 rshift if xf or then
+                        z -> f c!
+                        4. z -> cyc 2+!
+                    then
+                endof
+                2 of  _y_ bit 255 xor _reg_ c@ and _reg_ c! endof
+                3 of  _y_ bit _reg_ c@ or _reg_ c! endof
+            endcase
+
+            _x_ 0= _x_ 2 = or _x_ 3 = or _z_ 6 = and if 7. z -> cyc 2+! then
+            _reg_ _hl_ =  _x_ 1 <> and if z -> get-hl _hl_ c@ z -> wb then
+
+        ; define exec-opcode-cb
+
+        :noname { opcode adr z }
+            adr z -> rb { val }
+            0 { result }
+            opcode 6 rshift 3 and   { _x_ }
+            opcode 3 rshift 7 and   { _y_ }
+            opcode 7 and            { _z_ }
+
+            _x_ case
+                0 of
+                   _y_ case
+                        0 of val z -> cb_rlc to result endof
+                        1 of val z -> cb_rrc to result endof
+                        2 of val z -> cb_rl to result endof
+                        3 of val z -> cb_rr to result endof
+                        4 of val z -> cb_sla to result endof
+                        5 of val z -> cb_sra to result endof
+                        6 of val z -> cb_sll to result endof
+                        7 of val z -> cb_srl to result endof
+                   endcase
+                endof
+                1 of    \ bit y,(iz+d)
+                    val _y_ z -> cb_bit  to result
+                    5 adr 8 rshift GET_BIT yf z -> set-flag
+                    3 adr 8 rshift GET_BIT xf z -> set-flag
+                endof
+                2 of _y_ bit 255 xor val and to result endof  \ res y,(iz+d)
+                3 of _y_ bit  val or to result endof         \ set y,(iz+d)
+            endcase
+
+              \ ld r[z], rot[y] (iz+d)
+              \ ld r[z], res y,(iz+d)
+              \ ld r[z], set y,(iz+d)
+            _x_ 1 <> _z_ 6 <> and if
+                _z_ case
+                    0 of result z -> b c! endof
+                    1 of result z -> c c! endof
+                    2 of result z -> d c! endof
+                    3 of result z -> e c! endof
+                    4 of result z -> h c! endof
+                    5 of result z -> l c! endof
+                    6 of z -> get-hl result z -> wb endof
+                    7 of result z -> a c! endof
+                endcase
+            then
+
+            _x_ 1 = if
+                20. z -> cyc 2+!
+            else
+                adr result z -> wb
+                23. z -> cyc 2+!
+            then
+
+        ; define exec-opcode-dcb
    
+        :noname { opcode z }
+            cyc_ed opcode + c@ s>d z -> cyc 2+!
+            z -> inc-r
+            z z -> opcodes-ed-table @ opcode cells + @ execute
+        ; define exec-opcode-ed
 
     
 
@@ -1069,10 +1184,10 @@ begin-module z80
                $23 [: { z } z -> get-hl 1+ z -> set-hl ;] opcode-add \ inc hl
                $33 [: { z } z -> sp h@ 1+ z -> sp h! ;] opcode-add \ inc sp
 
-               $03 [: { z } z -> get-bc 1- z -> set-bc ;] opcode-add \ dec bc
-               $13 [: { z } z -> get-de 1- z -> set-de ;] opcode-add \ dec de
-               $23 [: { z } z -> get-hl 1- z -> set-hl ;] opcode-add \ dec hl
-               $33 [: { z } z -> sp h@ 1- z -> sp h! ;] opcode-add \ dec sp
+               $0B [: { z } z -> get-bc 1- z -> set-bc ;] opcode-add \ dec bc
+               $1B [: { z } z -> get-de 1- z -> set-de ;] opcode-add \ dec de
+               $2B [: { z } z -> get-hl 1- z -> set-hl ;] opcode-add \ dec hl
+               $3B [: { z } z -> sp h@ 1- z -> sp h! ;] opcode-add \ dec sp
 
                $27 [: { z } z -> daa ;] opcode-add \ daa
 
@@ -1106,7 +1221,7 @@ begin-module z80
                
                $07 [: { z }
                     z -> a c@ $80 and cf z -> set-flag
-                    z -> a c@ 1 lshift cf z -> get-flag if 1 or then dup z -> a c@
+                    z -> a c@ 1 lshift cf z -> get-flag if 1 or then dup z -> a c!
                     z -> f c@ nf hf xf yf or or or  255 xor and
                     over 3 swap GET_BIT if xf or then
                     over 5 swap GET_BIT if yf or then
@@ -1116,7 +1231,7 @@ begin-module z80
 
                $0F [: { z }
                     z -> a c@ $1 and cf z -> set-flag
-                    z -> a c@ 1 rshift cf z -> get-flag if $80 or then dup z -> a c@
+                    z -> a c@ 1 rshift cf z -> get-flag if $80 or then dup z -> a c!
                     z -> f c@ nf hf xf yf or or or  255 xor and
                     over 3 swap GET_BIT if xf or then
                     over 5 swap GET_BIT if yf or then
@@ -1127,7 +1242,7 @@ begin-module z80
                $17 [: { z }
                     cf z -> get-flag
                     z -> a c@ $80 and cf z -> set-flag
-                    z -> a c@ 1 lshift swap if 1 or then dup z -> a c@
+                    z -> a c@ 1 lshift swap if 1 or then dup z -> a c!
                     z -> f c@ nf hf xf yf or or or  255 xor and
                     over 3 swap GET_BIT if xf or then
                     over 5 swap GET_BIT if yf or then
@@ -1137,7 +1252,7 @@ begin-module z80
                $1F [: { z }
                     cf z -> get-flag
                     z -> a c@ $1 and cf z -> set-flag
-                    z -> a c@ 1 rshift swap if $80 or then dup z -> a c@
+                    z -> a c@ 1 rshift swap if $80 or then dup z -> a c!
                     z -> f c@ nf hf xf yf or or or  255 xor and
                     over 3 swap GET_BIT if xf or then
                     over 5 swap GET_BIT if yf or then
@@ -1246,7 +1361,7 @@ begin-module z80
                $C1 [: { z } z -> popw z -> set-bc ;] opcode-add \ pop bc
                $D1 [: { z } z -> popw z -> set-de ;] opcode-add \ pop de
                $E1 [: { z } z -> popw z -> set-hl ;] opcode-add \ pop hl
-               $F1 [: { z } z -> popw dup 8 lshift z -> a c@ $ff and z -> f c!  ;] opcode-add \ pop af
+               $F1 [: { z } z -> popw dup 8 rshift z -> a c! $ff and z -> f c!  ;] opcode-add \ pop af
                $DB [: { z } z -> a c@ z -> nextb
                             z -> port-in z -> a c!
                             8 lshift z -> a c@ 1+ or z -> mem_ptr h!
@@ -1356,8 +1471,64 @@ begin-module z80
                 $2A [: { iz z } z -> nextw z -> rw iz h! ;] opcode-add \ ld iz,(**)
                 $22 [: { iz z } z -> nextw iz h@ z -> ww ;] opcode-add \ ld (**),iz
                 $21 [: { iz z } z -> nextw iz h! ;] opcode-add \ ld iz,**
+                
+                $36 [: { iz z } 
+                                iz h@ z -> nextb z -> displace 
+                                z -> nextb 
+                                z -> wb
+                ;] opcode-add \ ld ( iz+*),*
 
+                $70 [: { iz z } iz h@ z -> nextb z -> displace z -> b c@ z -> wb ;] opcode-add \ ld (iz+*),b
+                $71 [: { iz z } iz h@ z -> nextb z -> displace z -> c c@ z -> wb ;] opcode-add \ ld (iz+*),c
+                $72 [: { iz z } iz h@ z -> nextb z -> displace z -> d c@ z -> wb ;] opcode-add \ ld (iz+*),d
+                $73 [: { iz z } iz h@ z -> nextb z -> displace z -> e c@ z -> wb ;] opcode-add \ ld (iz+*),e
+                $74 [: { iz z } iz h@ z -> nextb z -> displace z -> h c@ z -> wb ;] opcode-add \ ld (iz+*),h
+                $75 [: { iz z } iz h@ z -> nextb z -> displace z -> l c@ z -> wb ;] opcode-add \ ld (iz+*),l
+                $77 [: { iz z } iz h@ z -> nextb z -> displace z -> a c@ z -> wb ;] opcode-add \ ld (iz+*),a
+                
+                $46 [: { iz z } iz h@ z -> nextb z -> displace z -> rb z -> b c! ;] opcode-add \ ld b,(iz+*)
+                $4E [: { iz z } iz h@ z -> nextb z -> displace z -> rb z -> c c! ;] opcode-add \ ld c,(iz+*)
+                $56 [: { iz z } iz h@ z -> nextb z -> displace z -> rb z -> d c! ;] opcode-add \ ld d,(iz+*)
+                $5E [: { iz z } iz h@ z -> nextb z -> displace z -> rb z -> e c! ;] opcode-add \ ld e,(iz+*)
+                $66 [: { iz z } iz h@ z -> nextb z -> displace z -> rb z -> h c! ;] opcode-add \ ld h,(iz+*)
+                $6E [: { iz z } iz h@ z -> nextb z -> displace z -> rb z -> l c! ;] opcode-add \ ld l,(iz+*)
+                $7E [: { iz z } iz h@ z -> nextb z -> displace z -> rb z -> a c! ;] opcode-add \ ld a,(iz+*)
 
+                $44 [: { iz z } iz h@ 8 rshift z -> b c! ;] opcode-add \ ld b,izh
+                $4C [: { iz z } iz h@ 8 rshift z -> c c! ;] opcode-add \ ld c,izh
+                $54 [: { iz z } iz h@ 8 rshift z -> d c! ;] opcode-add \ ld d,izh
+                $5C [: { iz z } iz h@ 8 rshift z -> e c! ;] opcode-add \ ld e,izh
+                $7C [: { iz z } iz h@ 8 rshift z -> a c! ;] opcode-add \ ld f,izh
+                
+                $45 [: { iz z } iz h@ $ff and  z -> b c! ;] opcode-add \ ld b,izl
+                $4D [: { iz z } iz h@ $ff and  z -> c c! ;] opcode-add \ ld c,izl
+                $55 [: { iz z } iz h@ $ff and  z -> d c! ;] opcode-add \ ld d,izl
+                $5D [: { iz z } iz h@ $ff and  z -> e c! ;] opcode-add \ ld e,izl
+                $7D [: { iz z } iz h@ $ff and  z -> a c! ;] opcode-add \ ld f,izl
+
+                $60 [: { iz z } z -> b c@ iz 1+ c! ;] opcode-add \ ld izh,b
+                $61 [: { iz z } z -> c c@ iz 1+ c! ;] opcode-add \ ld izh,c
+                $62 [: { iz z } z -> d c@ iz 1+ c! ;] opcode-add \ ld izh,d
+                $63 [: { iz z } z -> e c@ iz 1+ c! ;] opcode-add \ ld izh,e
+                $64 [: { iz z } ;] opcode-add \ ld izh,izh
+                $65 [: { iz z } iz c@ iz 1+ c! ;] opcode-add \ ld izh,izl
+                $67 [: { iz z } z -> a c@ iz 1+ c! ;] opcode-add \ ld izh,a
+                $26 [: { iz z } z -> nextb iz 1+ c! ;] opcode-add \ ld izh,*
+
+                $68 [: { iz z } z -> b c@ iz c! ;] opcode-add \ ld izl,b
+                $69 [: { iz z } z -> c c@ iz c! ;] opcode-add \ ld izl,c
+                $6A [: { iz z } z -> d c@ iz c! ;] opcode-add \ ld izl,d
+                $6B [: { iz z } z -> e c@ iz c! ;] opcode-add \ ld izl,e
+                $6C [: { iz z } iz 1+ c@ iz c! ;] opcode-add \ ld izl,izh
+                $6D [: { iz z } ;] opcode-add \ ld izl,izl
+                $6F [: { iz z } z -> a c@ iz c! ;] opcode-add \ ld izl,a
+                $2E [: { iz z } z -> nextb iz  c! ;] opcode-add \ ld izl,*
+
+                $F9 [: { iz z } iz h@ z -> sp h! ;] opcode-add \ ld sp,iz
+                
+                $E3 [: { iz z } z -> sp h@ z -> rw iz h@ z -> sp h@ swap z -> rw iz h! ;] opcode-add \ ex (sp),iz
+                
+                $CB [: { iz z } iz h@ z -> nextb z -> displace z -> nextb swap z -> exec-opcode-dcb ;] opcode-add \
         ;
 
         gen-opcodes-ddfd-table
@@ -1370,22 +1541,199 @@ begin-module z80
         ;
         write-opcodes-ddfd-table
         :noname opcodes-ddfd-tbl ; is opcodes-ddfd-table-adr
-       \ ----------------------------------------------------- 
-        : gen-opcodes-cb-table
-        ;
+       \ -----------------------------------------------------
+        :noname { z } ." Unknown ED instruction" CR ;
+        256 0 do dup opcodes-table-buffer i cells + ! loop drop
 
-        gen-opcodes-cb-table
-
-        
-        : write-opcodes-cb-table s" create opcodes-cb-tbl " evaluate
-            256 0 do 
-                opcodes-table-buffer i cells + @ ,
-            loop
-        ;
-        write-opcodes-cb-table
-        :noname opcodes-cb-tbl ; is opcodes-cb-table-adr
-       \ ----------------------------------------------------
         : gen-opcodes-ed-table
+
+                $47 [: { z } z -> a c@ z -> i_ c! ;] opcode-add \ ld i,a
+                $48 [: { z } z -> a c@ z -> r  c! ;] opcode-add \ ld r,a
+                $57 [: { z } 
+                                z -> i_ c@ z -> a c!
+                                z -> f c@ sf zf hf nf pf or or or or 255 xor and
+                                z -> a c@ $80 and if sf or then
+                                z -> a c@ 0= if zf or then
+                                z -> state c@ iff2 and if pf or then
+                                z -> f c!
+                                ;] opcode-add \ ld a,i
+                $5F [: { z } 
+                                z -> r c@ z -> a c!
+                                z -> f c@ sf zf hf nf pf or or or or 255 xor and
+                                z -> a c@ $80 and if sf or then
+                                z -> a c@ 0= if zf or then
+                                z -> state c@ iff2 and if pf or then
+                                z -> f c!
+                                ;] opcode-add \ ld a,r
+
+                    [: { z } z -> state c@ iff1 255 xor and
+                             z -> state c@ iff2 and if iff1 or then z -> state c!
+                             z -> ret ;] { retn }
+
+                $45 retn opcode-add
+                $55 retn opcode-add
+                $5D retn opcode-add
+                $65 retn opcode-add
+                $6D retn opcode-add
+                $75 retn opcode-add
+                $7D retn opcode-add
+
+                $4D [: { z } z -> ret ;] opcode-add \ reti
+
+
+                $A0 [: { z } z -> ldi ;] opcode-add \ ldi
+                $B0 [: { z } z -> ldi 
+                             z -> get-bc if
+                                -2 z -> pc h+!
+                                5. z -> cyc 2+!
+                                z -> pc h@ 1+ z -> mem_ptr h!
+                             then
+                ;] opcode-add \ ldir
+                $A8 [: { z } z -> ldd ;] opcode-add \ ldd
+                $B8 [: { z } z -> ldd
+                             z -> get-bc if
+                                -2 z -> pc h+!
+                                5. z -> cyc 2+!
+                                z -> pc h@ 1+ z -> mem_ptr h!
+                             then
+                ;] opcode-add \ lddr
+
+
+                $A1 [: { z } z -> cpi ;] opcode-add \ cpi
+                $A9 [: { z } z -> cpd ;] opcode-add \ cpd
+                $B1 [: { z } z -> cpi 
+                            z -> get-bc 0 <> zf z -> get-flag 0= and if
+                                -2 z -> pc h+!
+                                5. z -> cyc 2+!
+                                z -> pc h@ 1+ z -> mem_ptr h!
+                            else
+                                1 z -> mem_ptr h+!
+                            then
+                ;] opcode-add \ cpir
+                $B9 [: { z } z -> cpd
+                            z -> get-bc 0 <> zf z -> get-flag 0= and if
+                                -2 z -> pc h+!
+                                5. z -> cyc 2+!
+                                z -> pc h@ 1+ z -> mem_ptr h!
+                            else
+                                1 z -> mem_ptr h+!
+                            then
+                ;] opcode-add \ cpdr
+
+                $40 [: { z } z -> b z -> in_r_c ;] opcode-add \ in b,(c)
+                $48 [: { z } z -> c z -> in_r_c ;] opcode-add \ in c,(c)
+                $50 [: { z } z -> d z -> in_r_c ;] opcode-add \ in d,(c)
+                $58 [: { z } z -> e z -> in_r_c ;] opcode-add \ in e,(c)
+                $60 [: { z } z -> h z -> in_r_c ;] opcode-add \ in h,(c)
+                $68 [: { z } z -> l z -> in_r_c ;] opcode-add \ in l,(c)
+                $70 [: { z } z -> dummy 1+ z -> in_r_c ;] opcode-add \ in (c)
+                $78 [: { z } z -> a z -> in_r_c  z -> get-bc 1+ z -> mem_ptr h! ;] opcode-add \ in a,(c)
+                
+                $A2 [: { z } z -> ini ;] opcode-add \ ini
+                $B2 [: { z } z -> ini
+                                        z -> b c@ 0> if
+                                            -2 z -> pc h+!
+                                            5. z -> cyc 2+!
+                                        then
+                    ;] opcode-add \ inir
+                $AA [: { z } z -> ind ;] opcode-add \ ind
+                $BA [: { z } z -> ind
+                                        z -> b c@ 0> if
+                                            -2 z -> pc h+!
+                                            5. z -> cyc 2+!
+                                        then
+                    ;] opcode-add \ indr
+
+                $41 [: { z } z -> c c@ z -> b c@ z -> port-out ;] opcode-add \ out (c),b
+                $49 [: { z } z -> c c@ z -> c c@ z -> port-out ;] opcode-add \ out (c),c
+                $51 [: { z } z -> c c@ z -> d c@ z -> port-out ;] opcode-add \ out (c),d
+                $59 [: { z } z -> c c@ z -> e c@ z -> port-out ;] opcode-add \ out (c),e
+                $61 [: { z } z -> c c@ z -> h c@ z -> port-out ;] opcode-add \ out (c),h
+                $69 [: { z } z -> c c@ z -> l c@ z -> port-out ;] opcode-add \ out (c),l
+                $71 [: { z } z -> c c@ 0 z -> port-out ;] opcode-add \ out (c),0
+                $79 [: { z } z -> c c@ z -> a c@ z -> port-out z -> get-bc 1+ z -> mem_ptr h! ;] opcode-add \ out (c),a
+    
+                $A3 [: { z } z -> outi ;] opcode-add \ outi
+                $B3 [: { z } z -> outi 
+                                        z -> b c@ 0> if 
+                                            -2 z -> pc h+!
+                                            5. z -> cyc 2+!
+                                        then
+                ;] opcode-add \ outir
+                $AB [: { z } z -> outd ;] opcode-add \ outd
+                $BB [: { z } z -> outd 
+                                        z -> b c@ 0> if 
+                                            -2 z -> pc h+!
+                                            5. z -> cyc 2+!
+                                        then
+                ;] opcode-add \ outdr
+
+                $42 [: { z } z -> get-bc z -> sbchl ;] opcode-add \ sbc hl,bc
+                $52 [: { z } z -> get-de z -> sbchl ;] opcode-add \ sbc hl,de
+                $62 [: { z } z -> get-hl z -> sbchl ;] opcode-add \ sbc hl,hl
+                $72 [: { z } z -> sp h@  z -> sbchl ;] opcode-add \ sbc hl,sp
+
+                $4A [: { z } z -> get-bc z -> adchl ;] opcode-add \ adc hl,bc
+                $5A [: { z } z -> get-de z -> adchl ;] opcode-add \ adc hl,de
+                $6A [: { z } z -> get-hl z -> adchl ;] opcode-add \ adc hl,hl
+                $7A [: { z } z -> sp h@  z -> adchl ;] opcode-add \ adc hl,sp
+
+                $43 [: { z } z -> nextw dup z -> get-bc z -> ww 1+ z -> mem_ptr h! ;] opcode-add \ ld (**),bc
+                $53 [: { z } z -> nextw dup z -> get-de z -> ww 1+ z -> mem_ptr h! ;] opcode-add \ ld (**),de
+                $63 [: { z } z -> nextw dup z -> get-hl z -> ww 1+ z -> mem_ptr h! ;] opcode-add \ ld (**),hl
+                $73 [: { z } z -> nextw dup z -> sp h@  z -> ww 1+ z -> mem_ptr h! ;] opcode-add \ ld (**),sp
+
+                $4B [: { z } z -> nextw dup z -> rw z -> set-bc 1+ z -> mem_ptr h! ;] opcode-add \ ld bc, (**)
+                $5B [: { z } z -> nextw dup z -> rw z -> set-de 1+ z -> mem_ptr h! ;] opcode-add \ ld de, (**)
+                $6B [: { z } z -> nextw dup z -> rw z -> set-hl 1+ z -> mem_ptr h! ;] opcode-add \ ld hl, (**)
+                $7B [: { z } z -> nextw dup z -> rw z -> sp h!  1+ z -> mem_ptr h! ;] opcode-add \ ld sp, (**)
+                    [: { z } 0 z -> a c@ 0 z -> subb z -> a c! ;] { neg }
+                $44  neg opcode-add \ neg
+                $54  neg opcode-add \ neg
+                $64  neg opcode-add \ neg
+                $74  neg opcode-add \ neg
+                $4C  neg opcode-add \ neg
+                $5C  neg opcode-add \ neg
+                $6C  neg opcode-add \ neg
+                $7C  neg opcode-add \ neg
+
+                 
+                $46 [: { z } 0 z -> interrupt_mode c! ;] opcode-add \ im 0
+                $66 [: { z } 0 z -> interrupt_mode c! ;] opcode-add \ im 0
+                $56 [: { z } 1 z -> interrupt_mode c! ;] opcode-add \ im 1
+                $76 [: { z } 1 z -> interrupt_mode c! ;] opcode-add \ im 1
+                $5E [: { z } 2 z -> interrupt_mode c! ;] opcode-add \ im 2
+                $7E [: { z } 2 z -> interrupt_mode c! ;] opcode-add \ im 2
+
+                $67 [: { z } 
+                                z -> a c@ { _a_ }
+                                z -> get-hl z -> rb { val }
+                                _a_ $F0 and val $0F and or z -> a c!
+                                z -> get-hl val 4 rshift _a_ 4 lshift or -> wb
+                                z -> f c@ cf and
+                                3 z -> a c@ GET_BIT if xf or then
+                                5 z -> a c@ GET_BIT if yf or then
+                                z -> a c@ 0= if zf or then
+                                z -> a c@ $80 and if sf or then
+                                z -> a parity if pf or then
+                                z -> get-hl 1+ z -> mem_ptr h!
+                                z -> f c!
+                ;] opcode-add \ rrd
+                $67 [: { z } 
+                                z -> a c@ { _a_ }
+                                z -> get-hl z -> rb { val }
+                                _a_ $F0 and val 4 rshift or z -> a c!
+                                z -> get-hl val 4 lshift _a_ $0F and or -> wb
+                                z -> f c@ cf and
+                                3 z -> a c@ GET_BIT if xf or then
+                                5 z -> a c@ GET_BIT if yf or then
+                                z -> a c@ 0= if zf or then
+                                z -> a c@ $80 and if sf or then
+                                z -> a parity if pf or then
+                                z -> get-hl 1+ z -> mem_ptr h!
+                                z -> f c!
+                ;] opcode-add \ rld
+
         ;
 
         gen-opcodes-ed-table
