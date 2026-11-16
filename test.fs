@@ -336,7 +336,8 @@ variable fails
                     0 255 cpu -> displace 65535 = and 
                     check
 
-
+    
+                     
                     
 
                         
@@ -352,8 +353,10 @@ variable fails
 
 ;
 
-#include zexall.cim.fs
+1 [if]
 
+#include zexall.cim.fs
+#include zexdoc.cim.fs
 
 : test-zexall
     $100 cpu -> pc h!
@@ -361,11 +364,26 @@ variable fails
     0 ram 6 + c! 128 ram 7 + c!
     0 { done }
     begin
-        cpu -> debug-output
+\        cpu -> debug-output
+\        cpu -> pc h@ ram + c@ h.2
         cpu -> step
         cpu -> pc h@ case
             5 of 
-                ." -----" cr 
+                cpu -> c c@ case
+                    1 of
+                        key cpu -> a c!
+                    endof
+                    2 of
+                        cpu -> e c@ emit
+                    endof
+                    9 of
+                        begin cpu -> get-de ram + c@ emit cpu -> get-de 1+ dup cpu -> set-de ram + c@ [char] $ = until
+                    endof
+                    11 of
+                        key? if $ff else $00 then cpu -> a c!
+                    endof
+                    ." Unimplemented syscall:" cpu -> c c@ .
+                endcase
                 cpu -> ret
             endof
             0 of
@@ -375,4 +393,47 @@ variable fails
         key? if key 27 = if 1 to done then then
     done until
 ;
+
+: test-zexdoc
+    $100 cpu -> pc h!
+    zexdoc-len 0 do zexdoc i + c@ ram $100 + i + c! loop
+    0 ram 6 + c! 128 ram 7 + c!
+    0 0 { done counter }
+    begin
+\        cpu -> debug-output
+\        cpu -> pc h@ ram + c@ h.2
+        cpu -> step
+        1 +to counter
+\        counter 10000000 mod 0= if cpu -> debug-output then
+        cpu -> pc h@ case
+            5 of 
+                cpu -> c c@ case
+                    1 of
+                        key cpu -> a c!
+                    endof
+                    2 of
+                        cpu -> e c@ emit
+                    endof
+                    9 of
+                        begin cpu -> get-de ram + c@ emit cpu -> get-de 1+ dup cpu -> set-de ram + c@ [char] $ = until
+                    endof
+                    11 of
+                        key? if $ff else $00 then cpu -> a c!
+                    endof
+                    ." Unimplemented syscall:" cpu -> c c@ .
+                endcase
+                cpu -> ret
+            endof
+            0 of
+                1 to done
+            endof
+        endcase
+        key? if key 27 = if 1 to done then then
+    done until
+;
+[then]
+\ #include jtests.fs
+
+
+
 
